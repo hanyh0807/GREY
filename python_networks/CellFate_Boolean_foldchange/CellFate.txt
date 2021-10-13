@@ -1,0 +1,11 @@
+TNF = <>
+FAS = <>
+RIP1 = ~C8 && (TNF || FAS)
+NFkB = (cIAP && RIP1) && ~C3
+C8 = (TNF || FAS || C3) && ~NFkB
+cIAP = (NFkB || cIAP) && ~MOMP
+ATP = ~MPT
+C3 = ATP && MOMP && ~NFkB
+ROS = ~NFkB && (RIP1 || MPT)
+MOMP = MPT || (C8 && ~NFkB)
+MPT = ROS && ~NFkB

@@ -4,7 +4,6 @@ import os
 import numpy as np
 import pandas as pd
 from scipy.stats import spearmanr
-from scipy.spatial import distance
 from multiprocessing import Process, Queue, Array, Value, Event
 from sklearn.feature_selection import mutual_info_regression
 import networkx as nx
@@ -180,7 +179,8 @@ class simul():
         reset_dummy_weightmat = True
         while reset_dummy_weightmat:
             np.random.seed()
-            newseed = np.random.choice(int(self.max_task_num.value))
+            #newseed = np.random.choice(int(self.max_task_num.value))
+            newseed = 123451346
             if newseed in self.dontidx:
                 continue
             np.random.seed(newseed)
@@ -193,15 +193,17 @@ class simul():
                     #Generating random network
                     nettype = np.random.choice(['sf'])
                     if nettype == 'sf':
-                        numnode = np.random.randint(20,41)
+                        genseed = 100
+                        numnode = 50
                         G = nx.generators.directed.scale_free_graph(numnode, alpha=0.2,beta=0.6,gamma=0.2, delta_in=1, delta_out=1, seed=genseed)
                     elif nettype == 'gnp':
                         numnode = np.random.randint(13,31)
                         connectp = np.random.rand()*0.2 + 0.15
                         G = nx.generators.random_graphs.fast_gnp_random_graph(numnode, p=connectp, seed=genseed, directed=True)
                     elif nettype == 'rko':
-                        numnode = np.random.randint(15,30)
-                        outdeg = np.random.choice(2) + 2    #2~3
+                        genseed = 100
+                        numnode = 50
+                        outdeg = 3
                         G = nx.generators.directed.random_k_out_graph(numnode, outdeg, 1, seed=genseed)
                     else:
                         raise KeyError
@@ -240,9 +242,11 @@ class simul():
 
                     if self.use_randsign:
                         tempsign = np.ones_like(ww)
-                        posratio = np.random.rand()*0.6 + 0.2
+                        #posratio = np.random.rand()*0.6 + 0.2
+                        posratio = 0.2
                         tempsign[np.random.rand(ww.size)>posratio] = -1
                         ww = np.abs(ww) * tempsign
+                        print('sign', np.unique(tempsign, return_counts=True))
                     else:
                         ww = np.abs(ww)
 
@@ -365,9 +369,7 @@ class simul():
                 self.do_reset_initials.value = 0
             if self.do_initialize_task.value == 1:
                 self.initialize_task(mb_size=int(self.mb_size.value))
-
                 self.params[:int(self.dummy_params_num.value)] = np.random.choice(np.arange(1,self.scale+1), size=int(self.dummy_params_num.value)) * np.sign(self.dummy_params[:int(self.dummy_params_num.value)])
-
             a_pred = np.array(self.params[:].copy())
             seed = int(self.seed.value)
 
@@ -518,14 +520,6 @@ class simul():
             spear = spear / mini_batch_size
             mi = mi / mini_batch_size
             zero_count = zero_count / mini_batch_size
-
-            if self.tvt.value == 3:
-                predw = np.round(a_pred[:np.count_nonzero(current_sm)]).astype(np.int)
-                ham = 1 - distance.hamming(current_origin, predw)
-                reward = reward * ham
-                spear = spear * ham
-                #mi = mi * ham
-                mi = ham
 
             #self.averact[:] = (yy_aver.reshape([-1]) / 2 - 0.5)
             self.zc.put(np.array(mi))

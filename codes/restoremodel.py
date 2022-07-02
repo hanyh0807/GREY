@@ -23,8 +23,9 @@ import copy
 import pickle
 import networkx as nx
 
-import python_networks.CellFate_Boolean_foldchange.Simul_tvt_split_mp_netgen as test_prob
-import python_networks.afatinib.Si_restore as test_prob_val
+#import python_networks.synthetic.Simul_tvt_split_mp_netgen as test_prob
+import python_networks.synthetic.Si_restore as test_prob
+import python_networks.trametinib.Si_restore as test_prob_val
 
 
 def discount_rewards(r,gamma):
@@ -203,15 +204,11 @@ class AC_Network():
         self.curiosity_encode_size = parameter_dict['curiosity_encode_size']
         self.curiosity_strength = parameter_dict['curiosity_strength']
         self.use_noisynet = parameter_dict['use_noisynet']
-        self.use_update_noise = parameter_dict['use_update_noise']
         self.use_attention = parameter_dict['use_attention']
-        self.use_context = parameter_dict['use_context']
-        self.probabilistic_context = parameter_dict['probabilistic_context']
         self.use_context_v2 = parameter_dict['use_context_v2']
         self.use_gs_estimator = parameter_dict['use_gs_estimator']
         self.use_message = parameter_dict['use_message']
         self.message_dim = parameter_dict['message_dim']
-        self.averact_context_target = parameter_dict['averact_context_target']
         self.gs_attention = parameter_dict['gs_attention']
         self.use_ib = parameter_dict['use_ib']
         self.use_varout = parameter_dict['use_varout']
@@ -221,9 +218,7 @@ class AC_Network():
         self.sg_unit = int(self.sg_unit_string[0])
         self.sg_layer = int(self.sg_unit_string[1])
         self.action_type = parameter_dict['action_type']
-        self.action_branching = parameter_dict['action_branching']
         self.incremental_action = parameter_dict['incremental_action']
-        self.stay_prev = parameter_dict['stay_prev']
         self.inc_bound = parameter_dict['inc_bound']
         self.action_width_real = action_width
         if self.action_type == 'continuous':
@@ -232,7 +227,6 @@ class AC_Network():
             self.action_width = np.zeros_like(action_width) + self.inc_bound
         else:
             self.action_width = action_width
-        self.autoregressive = parameter_dict['autoregressive']
         self.adj_mat = parameter_dict['adj_mat']
 
         self.trainer_pre = tf.compat.v1.train.AdamOptimizer(learning_rate=1e-5)
@@ -377,47 +371,6 @@ class AC_Network():
                     with tf.compat.v1.variable_scope('context'):
                         lc, lcbc = make_input_layer(l_first)
                         self.lcbc = lcbc
-
-                if self.use_context:
-                    with tf.compat.v1.variable_scope('sg_mix'):
-                        lc = tf.layers.dense(lcb, 128, activation=None, kernel_regularizer=tf.contrib.layers.l2_regularizer(5e-4))
-                    self.dummy_prevAction = []
-                    '''
-                    for ns in range(self.node_size):
-                        self.prevAction.append(tf.placeholder(tf.float32, [None, np.count_nonzero(self.adj_mat[ns+self.num_input_node,:])+1]))
-                    l = self.prevAction
-                    '''
-                    for ns in range(self.node_size):
-                        #elemnum = np.count_nonzero(self.adj_mat[ns+self.num_input_node,:])+1
-                        elemnum = np.count_nonzero(self.adj_mat[ns+self.num_input_node,:])
-                        tph = tf.placeholder(tf.float32, [None, elemnum])
-                        self.dummy_prevAction.append(tph)
-                    dl = [tf.reshape(tf.one_hot(tf.cast(pa, tf.int32),self.action_width_real[0]), [-1, int(pa.get_shape()[1]*self.action_width_real[0])]) for pa in self.dummy_prevAction]
-                    dl = self._make_semi_graph(dl, self.sg_unit, 0, reuse=True)
-                    dl = self._make_gru_semi_graph(dl, self.sg_unit, self.sg_layer, reuse=True)
-
-                    if self.use_varout:
-                        dl = tf.concat([tf.expand_dims(lt, 1) for lt in dl], axis=1)
-                    else:
-                        dl = tf.concat(dl, axis=1)
-
-                    fd = dl.get_shape()
-                    if self.use_varout:
-                        dl = tf.reshape(dl, shape=[-1,self.bst,fd[-2],fd[-1]])
-                        dl = tf.transpose(dl, [0,2,1,3])
-                    else:
-                        dl = tf.reshape(dl,shape=[-1,self.bst,fd[-1]])
-                    with tf.compat.v1.variable_scope('sg_mix'):
-                        if self.use_varout:
-                            dl = tf.reduce_sum(dl, axis=1)
-                        context_vector_target = tf.layers.dense(dl, 128, activation=None, reuse=True, kernel_regularizer=tf.contrib.layers.l2_regularizer(5e-4))
-                    if self.probabilistic_context:
-                        c_mean_target = context_vector_target[:,:,:self.h_size//2]
-                        c_var_target = tf.nn.softplus(context_vector_target[:,:,self.h_size//2:]) + 1e-7
-                        self.context_vector_target_dist = tfp.distributions.Normal(c_mean_target, c_var_target)
-                        #self.context_vector_target = tf.stop_gradient(self.context_vector_target_dist)
-                    else:
-                        self.context_vector_target = tf.stop_gradient(context_vector_target)
 
             elif self.input_type == 'graph_net':
                 self.bs = tf.compat.v1.placeholder(shape=(), dtype=tf.int32)
@@ -568,26 +521,6 @@ class AC_Network():
                 psnv_emb = tf.layers.dense(psnv_emb, self.sg_unit, activation=tf.nn.relu, kernel_regularizer=tf.contrib.layers.l2_regularizer(5e-4))
             
             self.context_state_init, self.context_rnn_state = 0, tf.constant(0)
-            if self.use_context:
-                context_input = tf.concat([lc, self.prevReward], axis=2)
-                #self.context_vector = tf.layers.dense(context_input, 128, activation=None)
-                context_lstm = tf.contrib.rnn.LSTMBlockCell(self.h_size)
-                cc_init = np.zeros((1, context_lstm.state_size.c), np.float32)
-                ch_init = np.zeros((1, context_lstm.state_size.h), np.float32)
-                self.context_state_init = [cc_init, ch_init]
-                cc_in = tf.compat.v1.placeholder(tf.float32, [None, context_lstm.state_size.c])
-                ch_in = tf.compat.v1.placeholder(tf.float32, [None, context_lstm.state_size.h])
-                self.context_state_in = (cc_in, ch_in)
-                context_state_in = tf.nn.rnn_cell.LSTMStateTuple(cc_in, ch_in)
-                self.context_vector,self.context_rnn_state = tf.nn.dynamic_rnn(\
-                    inputs=context_input,cell=context_lstm,dtype=tf.float32,initial_state=context_state_in,scope='context_rnn')
-                self.context_vector_for_input = tf.stop_gradient(self.context_vector)
-
-                if self.probabilistic_context:
-                    c_mean = self.context_vector[:,:,:self.h_size//2]
-                    c_var = tf.nn.softplus(self.context_vector[:,:,self.h_size//2:]) + 1e-7
-                    self.context_vector_dist = tfp.distributions.Normal(c_mean, c_var)
-                    self.context_vector_for_input = tf.stop_gradient(self.context_vector_dist.sample())
 
             if self.use_varout:
                 self.iidx = tf.compat.v1.placeholder(dtype=tf.int32, shape=[None, 2, 2])
@@ -635,10 +568,6 @@ class AC_Network():
 
             if self.use_varout:
                 self.netvec = link_feature
-                if self.use_context:
-                    self.context_vector_for_input = tf.expand_dims(self.context_vector_for_input, axis=1)
-                    self.context_vector_for_input = tf.tile(self.context_vector_for_input, [1,self.link_size,1,1])
-                    self.context_vector_for_input = tf.reshape(self.context_vector_for_input, [-1, self.bst, self.context_vector_for_input.get_shape()[-1]])
                 if self.gs_attention:
                     self.lcbp = lcbp = tf.concat([zp,self.lcb], axis=1)
                     gs = tf.gather_nd(lcbp, self.iidx)
@@ -721,12 +650,7 @@ class AC_Network():
                     chid = tf.layers.dense(chid, 128, activation=tf.nn.elu, kernel_regularizer=tf.contrib.layers.l2_regularizer(1e-6))
                     chid = tf.layers.dense(chid, 128, activation=tf.nn.elu, kernel_regularizer=tf.contrib.layers.l2_regularizer(1e-6))
                     self.context_vector_for_input = tf.stop_gradient(chid)
-                    if self.averact_context_target:
-                        self.context_logit_aa = tf.layers.dense(chid, 2, use_bias=False)
-                    if self.stay_prev:
-                        self.context_logit = tf.layers.dense(chid, self.action_width_real[0]-1, use_bias=False)
-                    else:
-                        self.context_logit = tf.layers.dense(chid, self.action_width_real[0], use_bias=False, kernel_regularizer=tf.contrib.layers.l2_regularizer(1e-6))
+                    self.context_logit = tf.layers.dense(chid, self.action_width_real[0], use_bias=False, kernel_regularizer=tf.contrib.layers.l2_regularizer(1e-6))
 
             if self.use_gs_estimator:
                 with tf.compat.v1.variable_scope('gs_estimator'):
@@ -746,13 +670,10 @@ class AC_Network():
                     self.gs_est_for_input = tf.reshape(self.gs_est, [-1,self.bst,self.gs_est.get_shape()[-1]])
 
             if self.action_type == 'select':
-                if self.use_context:
-                    lstm_input = tf.concat([l,self.prevReward,self.context_vector_for_input,psnv_emb],axis=2)
-                else:
-                    lstm_input = tf.concat([l,self.prevReward,psnv_emb],axis=2)
+                lstm_input = tf.concat([l,self.prevReward,psnv_emb],axis=2)
             else:
                 input_list = [self.netvec,pr,pr2,pa_oh,gs]
-                if self.use_context or self.use_context_v2:
+                if self.use_context_v2:
                     input_list.append(self.context_vector_for_input)
                 if self.use_gs_estimator:
                     input_list.append(self.gs_est_for_input)
@@ -762,14 +683,8 @@ class AC_Network():
                 self.li = lstm_input = tf.concat(input_list,axis=2)
             lstm_input = tf.layers.dense(lstm_input, self.h_size, activation=tf.nn.elu, kernel_regularizer=tf.contrib.layers.l2_regularizer(1e-6))
             #lstm_input = tf.layers.dense(lstm_input, self.h_size, activation=None, kernel_regularizer=tf.contrib.layers.l2_regularizer(1e-6))
-            if not self.use_update_noise:
-                #lstm_cell1 = tf.contrib.rnn.LSTMBlockCell(self.h_size)
-                #lstm_cell2 = tf.contrib.rnn.LSTMBlockCell(self.h_size)
-                lstm_cell1 = tf.contrib.rnn.LayerNormBasicLSTMCell(self.h_size)
-                lstm_cell2 = tf.contrib.rnn.LayerNormBasicLSTMCell(self.h_size)
-            else:
-                lstm_cell1 = tf.contrib.rnn.LayerNormBasicLSTMCell(self.h_size)
-                lstm_cell2 = tf.contrib.rnn.LayerNormBasicLSTMCell(self.h_size)
+            lstm_cell1 = tf.contrib.rnn.LayerNormBasicLSTMCell(self.h_size)
+            lstm_cell2 = tf.contrib.rnn.LayerNormBasicLSTMCell(self.h_size)
             rnn_cells = tf.contrib.rnn.MultiRNNCell([lstm_cell1, lstm_cell2])
             #rnn_cells = lstm_cell1
             c_init = np.zeros((1, lstm_cell1.state_size.c), np.float32)
@@ -798,43 +713,7 @@ class AC_Network():
             #self.rnn = tf.layers.dropout(self.rnn, training=True)
 
             if self.action_type == 'discrete':
-                if self.action_branching:
-                    with tf.compat.v1.variable_scope('action_branch'):
-                        self.ab = []
-                        for ns in range(self.node_size):
-                            self.ab.append(tf.layers.dense(self.rnn, 32, activation=tf.nn.relu))
-                        if self.output_type == 'fc':
-                            abl = self.ab
-                        elif self.output_type == 'semi_graph':
-                            abl = self.ab
-                            for sgl in range(self.sg_layer):
-                                abl = self._make_semi_graph(abl, self.sg_unit, sgl)
-                        elif self.output_type == 'gru_semi_graph':
-                            abl = self._make_gru_semi_graph(self.ab, self.sg_unit, self.sg_layer)
-
-                        link_weight_branches = []
-                        basal_branches = []
-                        for ns in range(self.node_size):
-                            for nsa in range(self.idx_house[ns].size):
-                                if self.incremental_action:
-                                    actout = tf.layers.dense(abl[ns], self.inc_bound, activation=None, use_bias=False, kernel_regularizer=tf.contrib.layers.l2_regularizer(1e-4))
-                                else:
-                                    actout = tf.layers.dense(abl[ns], self.action_width[self.idx_house[ns][nsa]], activation=None, use_bias=False, kernel_regularizer=tf.contrib.layers.l2_regularizer(1e-4))
-
-                                link_weight_branches.append(actout)
-                        '''        
-                                if nsa == (self.idx_house[ns].size-1):
-                                    basal_branches.append(actout)
-                                else:
-                                    link_weight_branches.append(actout)
-
-                        link_weight_branches.extend(basal_branches)
-                        '''        
-                        policy_branches = link_weight_branches
-
-                elif self.autoregressive:
-                    policy_branches = self._make_autoregressive_output(self.rnn)
-                elif self.use_varout:
+                if self.use_varout:
 
                     pb_temp = tf.layers.dense(self.rnn, self.h_size, activation=tf.nn.elu, kernel_regularizer=tf.contrib.layers.l2_regularizer(1e-6))
                     self.pb =policy_branches = [tf.layers.dense(pb_temp, self.action_width[0], activation=None, use_bias=False,
@@ -866,53 +745,16 @@ class AC_Network():
                     self.mode_policy = tf.identity(mode_output, name='mode_action')
 
             elif self.action_type == 'continuous':
-                if self.action_branching:
-                    with tf.compat.v1.variable_scope('action_branch'):
-                        self.ab = []
-                        for ns in range(self.node_size):
-                            self.ab.append(tf.layers.dense(self.rnn, 32, activation=tf.nn.relu))
-                        if self.output_type == 'semi_graph':
-                            abl = self.ab
-                            for sgl in range(self.sg_layer):
-                                abl = self._make_semi_graph(abl, self.sg_unit, sgl)
-                        elif self.output_type == 'gru_semi_graph':
-                            abl = self._make_gru_semi_graph(self.ab, self.sg_unit, self.sg_layer)
-
-                        link_weight_alpha = []
-                        link_weight_beta = []
-                        basal_alpha = []
-                        basal_beta = []
-                        for ns in range(self.node_size):
-                            actout_alpha = tf.layers.dense(abl[ns], self.idx_house[ns].size-1, activation=tf.nn.softplus)+ 1 + 1e-7
-                            actout_beta = tf.layers.dense(abl[ns], self.idx_house[ns].size-1, activation=tf.nn.softplus) + 1 + 1e-7
-
-                            link_weight_alpha.append(actout_alpha)
-                            link_weight_beta.append(actout_beta)
-
-                        '''
-                            actout_b_alpha = tf.layers.dense(abl[ns], 1, activation=tf.nn.softplus) + 1 + 1e-7
-                            actout_b_beta = tf.layers.dense(abl[ns], 1, activation=tf.nn.softplus) + 1 + 1e-7
-                            basal_alpha.append(actout_b_alpha)
-                            basal_beta.append(actout_b_beta)
-
-                        link_weight_alpha.extend(basal_alpha)
-                        link_weight_beta.extend(basal_beta)
-                        '''
-                        self.alpha = tf.concat(link_weight_alpha, 1)
-                        self.beta = tf.concat(link_weight_beta, 1)
-
-
+                if not self.use_noisynet:
+                    alpha = tf.layers.dense(self.rnn, self.a_size, activation=tf.nn.softplus, kernel_initializer=tf.contrib.layers.variance_scaling_initializer(factor=1.0, mode='FAN_AVG'), kernel_regularizer=tf.contrib.layers.l2_regularizer(5e-4))
+                    self.alpha = alpha + 1 + 1e-7
+                    beta = tf.layers.dense(self.rnn, self.a_size, activation=tf.nn.softplus, kernel_initializer=tf.contrib.layers.variance_scaling_initializer(factor=1.0, mode='FAN_AVG'), kernel_regularizer=tf.contrib.layers.l2_regularizer(5e-4))
+                    self.beta = beta + 1 + 1e-7
                 else:
-                    if not self.use_noisynet:
-                        alpha = tf.layers.dense(self.rnn, self.a_size, activation=tf.nn.softplus, kernel_initializer=tf.contrib.layers.variance_scaling_initializer(factor=1.0, mode='FAN_AVG'), kernel_regularizer=tf.contrib.layers.l2_regularizer(5e-4))
-                        self.alpha = alpha + 1 + 1e-7
-                        beta = tf.layers.dense(self.rnn, self.a_size, activation=tf.nn.softplus, kernel_initializer=tf.contrib.layers.variance_scaling_initializer(factor=1.0, mode='FAN_AVG'), kernel_regularizer=tf.contrib.layers.l2_regularizer(5e-4))
-                        self.beta = beta + 1 + 1e-7
-                    else:
-                        alpha = self.noisy_dense(self.rnn, self.a_size, 'alpha', bias=False, activation_fn=tf.nn.softplus)
-                        self.alpha = alpha + 1 + 1e-7
-                        beta = self.noisy_dense(self.rnn, self.a_size, 'beta', bias=False, activation_fn=tf.nn.softplus)
-                        self.beta = beta + 1 + 1e-7
+                    alpha = self.noisy_dense(self.rnn, self.a_size, 'alpha', bias=False, activation_fn=tf.nn.softplus)
+                    self.alpha = alpha + 1 + 1e-7
+                    beta = self.noisy_dense(self.rnn, self.a_size, 'beta', bias=False, activation_fn=tf.nn.softplus)
+                    self.beta = beta + 1 + 1e-7
 
                 self.sample_dist = tf.distributions.Beta(self.alpha, self.beta) # small alpha -> left skewed distribution
                 output = self.sample_dist.sample([1])
@@ -926,64 +768,29 @@ class AC_Network():
                 self.all_log_probs = tf.identity(all_log_probs, name="action_probs")
             
             elif self.action_type == 'select':
-                if not self.autoregressive:
-                    select_branch = tf.layers.dense(self.rnn, 128, activation=tf.nn.relu, kernel_regularizer=tf.contrib.layers.l2_regularizer(5e-4))
-                    select_branch = tf.layers.dense(select_branch, self.a_size, activation=None, use_bias=False)
-                    #select_branch = tf.layers.dense(select_branch, self.node_size, activation=None, use_bias=False)
-                    param_branch = tf.layers.dense(self.rnn, 128, activation=tf.nn.relu, kernel_regularizer=tf.contrib.layers.l2_regularizer(5e-4))
-                    if self.incremental_action:
-                        param_branch = tf.layers.dense(param_branch, self.inc_bound, activation=None, use_bias=False, kernel_regularizer=tf.contrib.layers.l2_regularizer(5e-4))
-                        self.select_action_array = [self.a_size, self.inc_bound]
-                    else:
-                        param_branch = tf.layers.dense(param_branch, self.action_width[0], activation=None, use_bias=False, kernel_regularizer=tf.contrib.layers.l2_regularizer(5e-4))
-                        self.select_action_array = [self.a_size, self.action_width[0]]
-                        #param_branch = tf.layers.dense(param_branch, 5, activation=None, use_bias=False, kernel_regularizer=tf.contrib.layers.l2_regularizer(5e-3))
-                        #self.select_action_array = [self.node_size, 5]
-
-                    policy_branches = [select_branch, param_branch]
-
-                    self.all_log_probs = tf.concat(policy_branches, axis=1, name="action_probs")
-
-                    output, normalized_logits = self.create_discrete_action_masking_layer(self.all_log_probs, self.select_action_array)
-                    self.policy = tf.identity(output, name="action")
-                    action_idx = [0] + list(np.cumsum(self.select_action_array,dtype=np.int32))
-                    branches_logits = [normalized_logits[:, action_idx[i]:action_idx[i + 1]] for i in range(len(self.select_action_array))]
-                    mode_output = tf.concat([tf.expand_dims(tf.argmax(bl, axis=1),axis=1) for bl in branches_logits], axis=1)
-                    self.mode_policy = tf.identity(mode_output, name='mode_action')
+                select_branch = tf.layers.dense(self.rnn, 128, activation=tf.nn.relu, kernel_regularizer=tf.contrib.layers.l2_regularizer(5e-4))
+                select_branch = tf.layers.dense(select_branch, self.a_size, activation=None, use_bias=False)
+                #select_branch = tf.layers.dense(select_branch, self.node_size, activation=None, use_bias=False)
+                param_branch = tf.layers.dense(self.rnn, 128, activation=tf.nn.relu, kernel_regularizer=tf.contrib.layers.l2_regularizer(5e-4))
+                if self.incremental_action:
+                    param_branch = tf.layers.dense(param_branch, self.inc_bound, activation=None, use_bias=False, kernel_regularizer=tf.contrib.layers.l2_regularizer(5e-4))
+                    self.select_action_array = [self.a_size, self.inc_bound]
                 else:
-                    select_branch = tf.layers.dense(self.rnn, 128, activation=tf.nn.relu, kernel_regularizer=tf.contrib.layers.l2_regularizer(5e-4))
-                    select_branch = tf.layers.dense(select_branch, self.a_size, activation=None, use_bias=False, kernel_regularizer=tf.contrib.layers.l2_regularizer(5e-4))
-                    #select_branch = tf.layers.dense(select_branch, self.node_size, activation=None, use_bias=False, kernel_regularizer=tf.contrib.layers.l2_regularizer(5e-3))
+                    param_branch = tf.layers.dense(param_branch, self.action_width[0], activation=None, use_bias=False, kernel_regularizer=tf.contrib.layers.l2_regularizer(5e-4))
+                    self.select_action_array = [self.a_size, self.action_width[0]]
+                    #param_branch = tf.layers.dense(param_branch, 5, activation=None, use_bias=False, kernel_regularizer=tf.contrib.layers.l2_regularizer(5e-3))
+                    #self.select_action_array = [self.node_size, 5]
 
-                    output_s, normalized_logits_s = self.create_discrete_action_masking_layer(select_branch, [self.a_size])
+                policy_branches = [select_branch, param_branch]
 
-                    pbinput = tf.squeeze(tf.one_hot(tf.cast(output_s, tf.int32), self.a_size, dtype=tf.float32), -2)
-                    #pbinput = tf.squeeze(tf.one_hot(tf.cast(output_s, tf.int32), self.node_size, dtype=tf.float32), -2)
-                    pbinput = tf.concat([self.rnn, pbinput], axis=-1)
+                self.all_log_probs = tf.concat(policy_branches, axis=1, name="action_probs")
 
-                    param_branch = tf.layers.dense(pbinput, 128, activation=tf.nn.relu, kernel_regularizer=tf.contrib.layers.l2_regularizer(5e-4))
-                    if self.incremental_action:
-                        param_branch = tf.layers.dense(param_branch, self.inc_bound, activation=None, use_bias=False, kernel_regularizer=tf.contrib.layers.l2_regularizer(5e-4))
-                        self.select_action_array = [self.a_size, self.inc_bound]
-                    else:
-                        param_branch = tf.layers.dense(param_branch, self.action_width[0], activation=None, use_bias=False, kernel_regularizer=tf.contrib.layers.l2_regularizer(5e-4))
-                        #param_branch = tf.layers.dense(param_branch, 5, activation=None, use_bias=False, kernel_regularizer=tf.contrib.layers.l2_regularizer(5e-3))
-                        self.select_action_array = [self.a_size, self.action_width[0]]
-                        #self.select_action_array = [self.node_size, 5]
-
-                    policy_branches = [select_branch, param_branch]
-
-                    self.all_log_probs = tf.concat(policy_branches, axis=1, name="action_probs")
-
-                    output_p, normalized_logits_p = self.create_discrete_action_masking_layer(param_branch, [self.select_action_array[1]])
-
-                    normalized_logits = tf.concat([normalized_logits_s, normalized_logits_p], axis=-1)
-
-                    self.policy = tf.identity(tf.concat([output_s, output_p], -1), name="action")
-                    action_idx = [0] + list(np.cumsum(self.select_action_array,dtype=np.int32))
-                    branches_logits = [normalized_logits[:, action_idx[i]:action_idx[i + 1]] for i in range(len(self.select_action_array))]
-                    mode_output = tf.concat([tf.expand_dims(tf.argmax(bl, axis=1),axis=1) for bl in branches_logits], axis=1)
-                    self.mode_policy = tf.identity(mode_output, name='mode_action')
+                output, normalized_logits = self.create_discrete_action_masking_layer(self.all_log_probs, self.select_action_array)
+                self.policy = tf.identity(output, name="action")
+                action_idx = [0] + list(np.cumsum(self.select_action_array,dtype=np.int32))
+                branches_logits = [normalized_logits[:, action_idx[i]:action_idx[i + 1]] for i in range(len(self.select_action_array))]
+                mode_output = tf.concat([tf.expand_dims(tf.argmax(bl, axis=1),axis=1) for bl in branches_logits], axis=1)
+                self.mode_policy = tf.identity(mode_output, name='mode_action')
 
             with tf.compat.v1.variable_scope('value'):
                 value = tf.layers.dense(self.rnn, self.h_size, activation=tf.nn.elu, kernel_regularizer=tf.contrib.layers.l2_regularizer(1e-6))
@@ -1131,36 +938,11 @@ class AC_Network():
 
                         self.loss = 0.5 * self.value_loss + self.policy_loss - self.entropy * decay_beta + tf.compat.v1.losses.get_regularization_loss()
 
-                        if self.use_context:
-                            if self.probabilistic_context:
-                                prior = tfp.distributions.Normal(tf.zeros(self.h_size//2), tf.ones(self.h_size//2))
-                                target_kl = tfp.distributions.kl_divergence(self.context_vector_target_dist, prior)
-                                #context_kl = tfp.distributions.kl_divergence(self.context_vector_dist, prior)
-                                context_kl = tfp.distributions.kl_divergence(self.context_vector_dist, self.context_vector_target_dist)
-                                target_kl = target_kl[:,-1,:]
-                                context_kl = context_kl[:,-1,:]
-                                self.context_loss = (0.01 * tf.reduce_mean(target_kl) + 0.01 * tf.reduce_mean(context_kl)) / (parameter_dict['num_epoch'] * (parameter_dict['buffer_ready_size'] / parameter_dict['update_batch_size']))
-                                #self.context_loss = 0.01 * tf.reduce_mean(context_kl)
-                                self.loss += self.context_loss
-                            else:
-                                self.context_loss = tf.reduce_mean(tf.squared_difference(self.context_vector[:,-1,:], self.context_vector_target[:,-1,:]))
-                                #self.context_loss = tf.reduce_mean(tf.squared_difference(self.context_vector, self.context_vector_target))
-                                self.loss += ((0.01 * self.context_loss) / (parameter_dict['num_epoch'] * (parameter_dict['buffer_ready_size'] / parameter_dict['update_batch_size'])))
-
                         if self.use_context_v2:
                             with tf.compat.v1.variable_scope('context'):
                                 self.dummy_param = tf.compat.v1.placeholder(dtype=tf.float32, shape=[None, 1])
-                                if self.averact_context_target:
-                                    prevAveract_s = tf.gather(self.prevAveract, self.prevAction.senders)
-                                    prevAveract_r = tf.gather(self.prevAveract, self.prevAction.receivers)
-                                    prevAveract = tf.concat([prevAveract_s, prevAveract_r], -1)
-                                    prevAveract = tf.gather(prevAveract, self.graph_iidx) #[batch*link*time,depth]
-                                    averact_context_target = tf.reshape(prevAveract, [-1, self.bst, prevAveract.get_shape()[-1]]) #[batch*link,time,depth]
 
-                                if self.stay_prev:
-                                    dummy_param = tf.one_hot(tf.cast(self.dummy_param, tf.int32),self.action_width_real[0]-1)
-                                else:
-                                    dummy_param = tf.one_hot(tf.cast(self.dummy_param, tf.int32),self.action_width_real[0])
+                                dummy_param = tf.one_hot(tf.cast(self.dummy_param, tf.int32),self.action_width_real[0])
                                 dummy_param = tf.tile(dummy_param, [1,self.bst,1])
 
                                 celoss = tf.nn.softmax_cross_entropy_with_logits_v2(labels=dummy_param, logits=self.context_logit)
@@ -1173,23 +955,6 @@ class AC_Network():
                                 #celoss = tf.keras.losses.KLD(dummy_param, tf.nn.softmax(self.context_logit))
                                 self.context_loss = (tf.reduce_mean(celoss)) + tf.compat.v1.losses.get_regularization_loss(scope+'/context')
 
-                                if self.averact_context_target:
-                                    closs = tf.math.squared_difference(averact_context_target, self.context_logit_aa)
-                                    '''
-                                    maskA = tf.zeros([1,tf.cast(self.bst/2,tf.int32)])
-                                    maskB = tf.ones([1, tf.cast(self.bst/2,tf.int32)])
-                                    mask = tf.concat([maskA, maskB], axis=1)
-                                    closs = closs * mask[:,:,tf.newaxis]
-                                    '''
-                                    self.context_loss += tf.reduce_mean(closs)
-
-                                '''
-                                iidx_param = tf.cast(tf.expand_dims(self.iidx[:,:,1], axis=1), tf.float32)
-                                self.ip = iidx_param = tf.tile(iidx_param, [1,self.bst,1])
-                                iidxloss = tf.reduce_mean(tf.square(tf.subtract(iidx_param,self.context_iidx_logit)))
-
-                                self.context_loss += (0.1 * iidxloss)
-                                '''
 
                                 if self.use_ib:
                                     prior = tfp.distributions.Normal(0.0, 1.0)
@@ -1402,22 +1167,6 @@ class AC_Network():
 
                     self.loss = 0.5 * self.value_loss + self.policy_loss - self.entropy * decay_beta + 0.05 * self.actpred_loss + tf.losses.get_regularization_loss()
 
-                    if self.use_context:
-                        if self.probabilistic_context:
-                            prior = tfp.distributions.Normal(tf.zeros(self.h_size//2), tf.ones(self.h_size//2))
-                            target_kl = tfp.distributions.kl_divergence(self.context_vector_target_dist, prior)
-                            #context_kl = tfp.distributions.kl_divergence(self.context_vector_dist, prior)
-                            context_kl = tfp.distributions.kl_divergence(self.context_vector_dist, self.context_vector_target_dist)
-                            target_kl = target_kl[:,-1,:]
-                            context_kl = context_kl[:,-1,:]
-                            self.context_loss = (0.01 * tf.reduce_mean(target_kl) + 0.01 * tf.reduce_mean(context_kl)) / (parameter_dict['num_epoch'] * (parameter_dict['buffer_ready_size'] / parameter_dict['update_batch_size']))
-                            #self.context_loss = 0.01 * tf.reduce_mean(context_kl)
-                            self.loss += self.context_loss
-                        else:
-                            self.context_loss = tf.reduce_mean(tf.squared_difference(self.context_vector[:,-1,:], self.context_vector_target[:,-1,:]))
-                            self.loss += ((0.1 * self.context_loss) / (parameter_dict['num_epoch'] * (parameter_dict['buffer_ready_size'] / parameter_dict['update_batch_size'])))
-
-
                     local_vars = tf.get_collection(tf.compat.v1.GraphKeys.TRAINABLE_VARIABLES, scope)
                     self.gradients = tf.gradients(self.loss,local_vars)
 
@@ -1439,7 +1188,7 @@ class AC_Network():
                     pl.append(self.worker_lists[i].local_AC.policy_loss)
                     vl.append(self.worker_lists[i].local_AC.value_loss)
                     al.append(self.worker_lists[i].local_AC.gs_loss)
-                    if self.use_context or self.use_context_v2:
+                    if self.use_context_v2:
                         cl.append(self.worker_lists[i].local_AC.context_loss)
                     sl.append(self.worker_lists[i].local_AC.sup_loss)
                     ent.append(self.worker_lists[i].local_AC.entropy)
@@ -1450,7 +1199,7 @@ class AC_Network():
                 self.value_loss = tf.reduce_mean(vl)
                 self.actpred_loss = tf.reduce_mean(al)
                 self.context_loss = tf.constant(0)
-                if self.use_context or self.use_context_v2:
+                if self.use_context_v2:
                     self.context_loss = tf.reduce_mean(cl)
                 self.sup_loss = tf.reduce_mean(sl)
                 self.entropy = tf.reduce_mean(ent)
@@ -1518,26 +1267,6 @@ class AC_Network():
                 grustates = outstate
 
         return out
-
-    def _make_autoregressive_output(self, rnn):
-        actlstm_hsize = 32
-        lstm_cell = tf.contrib.rnn.LSTMBlockCell(actlstm_hsize)
-        lstm_state = lstm_cell.zero_state(batch_size=self.bs, dtype=tf.float32)
-
-        policy_branches = []
-
-        #initial_act = tf.zeros((self.bs, actlstm_hsize), dtype=tf.float32)
-        initial_act = tf.zeros((self.bs, self.action_width[0]), dtype=tf.float32)
-        out = tf.concat([rnn, initial_act], axis=-1)
-        states = lstm_state
-        for asize in self.action_width:
-            out_, states = lstm_cell(out, states)
-            policy_branches.append(tf.layers.dense(out_, asize, activation=None, use_bias=False,
-                                    kernel_initializer=tf.contrib.layers.xavier_initializer(),
-                                    kernel_regularizer=tf.contrib.layers.l2_regularizer(1e-4)))
-            out = tf.concat([rnn, policy_branches[-1]], axis=-1)
-
-        return policy_branches
 
     def _calc_attention(self, q, k, v):
         matmul_qk = tf.matmul(q, k, transpose_b=True)
@@ -1748,9 +1477,7 @@ class Master():
         self.node_size = parameter_dict['node_size']
         self.num_input_node = parameter_dict['num_input_node']
         self.incremental_action = parameter_dict['incremental_action']
-        self.stay_prev = parameter_dict['stay_prev']
         self.inc_bound = parameter_dict['inc_bound']
-        self.use_context = parameter_dict['use_context']
         self.use_context_v2 = parameter_dict['use_context_v2']
         self.use_gs_estimator = parameter_dict['use_gs_estimator']
         self.use_message = parameter_dict['use_message']
@@ -1759,7 +1486,7 @@ class Master():
         self.context_update_period = self.buffer_size // self.buffer_ready_size
         self.update_counter = 0
 
-        self.summary_writer = tf.compat.v1.summary.FileWriter(parameter_dict['model_path']+"/train_master")
+        #self.summary_writer = tf.compat.v1.summary.FileWriter(parameter_dict['model_path']+"/train_master")
 
         link_size, node_size = self.env.get_num_params()
         weightmat = self.adj_mat[self.env.num_input_node:,:]
@@ -1779,8 +1506,6 @@ class Master():
         self.action_center = ac
         if parameter_dict['action_type'] == 'discrete' or parameter_dict['action_type'] == 'select':
             self.action_width += 1
-            if parameter_dict['stay_prev']:
-                self.action_width += 1
 
 
         if self.incremental_action:
@@ -1803,9 +1528,6 @@ class Master():
             tbs.append(self.memory_dict[n].pop())
 
         #state_train = [np.zeros([self.update_batch_size,self.h_size]),np.zeros([self.update_batch_size,self.h_size])]
-        if self.use_context:
-            context_state_train = [np.zeros([self.update_batch_size,self.h_size]),np.zeros([self.update_batch_size,self.h_size])]
-
         self.update_counter +=1 
         if pretrain.value == 1:
             cur_num_epoch = 1
@@ -1850,8 +1572,6 @@ class Master():
                     feed_dict[self.workers[i].local_AC.advantages] = np.concatenate(mini_batch['advantages']).reshape([-1, 1])
                     if self.input_type == 'fc':
                         feed_dict[self.workers[i].local_AC.prevAction] = mini_batch['prevAction'].reshape([-1,self.max_ep,self.a_size])
-                        if self.use_context:
-                            feed_dict[self.workers[i].local_AC.dummy_prevAction] = mini_batch['dummyParam'].reshape([-1,self.max_ep,self.a_size])
                         feed_dict[self.workers[i].local_AC.bs] = mini_batch['prevAction'].shape[0] * mini_batch['prevAction'].shape[1]
                         if self.use_varout:
                             feed_dict[self.workers[i].local_AC.zpsize] = self.update_batch_size
@@ -1860,16 +1580,12 @@ class Master():
                         netheight = self.node_size+self.env.num_input_node + 1
                         feed_dict[self.workers[i].local_AC.prevAction] = mini_batch['prevAction'].reshape([-1,netwidth,netheight,1])
                     else:
-                        if self.use_context:
-                            dobs = mini_batch['dummyParam'].reshape([-1,self.max_ep,self.a_size])
                         if self.use_context_v2:
                             feed_dict[self.workers[i].local_AC.dummy_param] = np.concatenate([_[0] for _ in mini_batch['dummyParam']]).reshape([-1,1])
                         if self.input_type != 'graph_net':
                             obs = mini_batch['prevAction'].reshape([-1,self.max_ep,self.a_size])
                             for ns in range(self.node_size):
                                 feed_dict[self.workers[i].local_AC.prevAction[ns]] = obs[:,:,self.idx_house[ns]].reshape([-1,len(self.idx_house[ns])])
-                                if self.use_context:
-                                    feed_dict[self.workers[i].local_AC.dummy_prevAction[ns]] = dobs[:,:,self.idx_house[ns]].reshape([-1,len(self.idx_house[ns])])
                                 if self.input_type == 'gru_semi_graph' or self.input_type == 'attention':
                                     feed_dict[self.workers[i].local_AC.bs] = mini_batch['prevAction'].shape[0] * mini_batch['prevAction'].shape[1]
                                     if self.use_varout:
@@ -1906,14 +1622,9 @@ class Master():
                         feed_dict[self.workers[i].local_AC.action_holder] =mini_batch['action_holder'].reshape([-1,2])
                     elif self.use_varout:
                         feed_dict[self.workers[i].local_AC.action_holder] =np.concatenate(mini_batch['action_holder']).reshape([-1,1])
-                        if self.stay_prev:
-                            par = mini_batch['action_holder'].reshape([-1,self.max_ep,1])[:,:-1,:]
-                            papre = np.zeros([par.shape[0],1,par.shape[2]]) - 1
-                            par = np.concatenate([papre,par], axis=1)
-                        else:
-                            par = np.concatenate([_.T for _ in mini_batch['prevAction']], axis=0).reshape([-1, self.max_ep, 1])
-                            for se in range(self.max_ep // self.reset_step):
-                                par[:,int(se*self.reset_step),:] = -1
+                        par = np.concatenate([_.T for _ in mini_batch['prevAction']], axis=0).reshape([-1, self.max_ep, 1])
+                        for se in range(self.max_ep // self.reset_step):
+                            par[:,int(se*self.reset_step),:] = -1
 
                         feed_dict[self.workers[i].local_AC.prevAction_raw] = par
                     else:
@@ -1929,7 +1640,7 @@ class Master():
                         feed_dict[self.workers[i].local_AC.all_old_log_probs] = mini_batch['action_probs'].reshape([-1,int(self.a_size+self.action_width[0])])
                         #feed_dict[self.workers[i].local_AC.all_old_log_probs] = mini_batch['action_probs'].reshape([-1,int(self.node_size+5)])
                     feed_dict[self.workers[i].local_AC.old_value] = np.concatenate(mini_batch['value_estimates']).flatten()
-                    if self.use_context or self.use_context_v2:
+                    if self.use_context_v2:
                         feed_dict[self.workers[i].local_AC.context_state_in[0]] = context_state_train[0]
                         feed_dict[self.workers[i].local_AC.context_state_in[1]] = context_state_train[1]
                     if self.use_gs_estimator:
@@ -1993,14 +1704,10 @@ class Master():
                         #feed_dict[self.workers[i].local_AC.prevAveract] = mini_batch['prevAveract'].reshape([-1,self.max_ep,self.node_size+self.num_input_node])
                         if self.input_type == 'fc':
                             feed_dict[self.workers[i].local_AC.prevAction] = mini_batch['prevAction'].reshape([-1,self.max_ep,self.a_size])
-                            if self.use_context:
-                                feed_dict[self.workers[i].local_AC.dummy_prevAction] = mini_batch['dummyParam'].reshape([-1,self.max_ep,self.a_size])
                             feed_dict[self.workers[i].local_AC.bs] = mini_batch['prevAction'].shape[0] * mini_batch['prevAction'].shape[1]
                             if self.use_varout:
                                 feed_dict[self.workers[i].local_AC.zpsize] = self.update_batch_size
                         else:
-                            if self.use_context:
-                                dobs = mini_batch['dummyParam'].reshape([-1,self.max_ep,self.a_size])
                             if self.use_context_v2:
                                 feed_dict[self.workers[i].local_AC.dummy_param] = np.concatenate([_[0] for _ in mini_batch['dummyParam']]).reshape([-1,1])
                                 feed_dict[self.workers[i].local_AC.prevAveract] = np.concatenate([_.reshape([-1,1]) for _ in mini_batch['prevAveract']], axis=0)
@@ -2008,8 +1715,6 @@ class Master():
                                 obs = mini_batch['prevAction'].reshape([-1,self.max_ep,self.a_size])
                                 for ns in range(self.node_size):
                                     feed_dict[self.workers[i].local_AC.prevAction[ns]] = obs[:,:,self.idx_house[ns]].reshape([-1,len(self.idx_house[ns])])
-                                    if self.use_context:
-                                        feed_dict[self.workers[i].local_AC.dummy_prevAction[ns]] = dobs[:,:,self.idx_house[ns]].reshape([-1,len(self.idx_house[ns])])
                                     if self.input_type == 'gru_semi_graph' or self.input_type == 'attention':
                                         feed_dict[self.workers[i].local_AC.bs] = mini_batch['prevAction'].shape[0] * mini_batch['prevAction'].shape[1]
                                         if self.use_varout:
@@ -2047,20 +1752,15 @@ class Master():
                             feed_dict[self.workers[i].local_AC.action_holder] =mini_batch['action_holder'].reshape([-1,2])
                         elif self.use_varout:
                             feed_dict[self.workers[i].local_AC.action_holder] =np.concatenate(mini_batch['action_holder']).reshape([-1,1])
-                            if self.stay_prev:
-                                par = mini_batch['action_holder'].reshape([-1,self.max_ep,1])[:,:-1,:]
-                                papre = np.zeros([par.shape[0],1,par.shape[2]]) - 1
-                                par = np.concatenate([papre,par], axis=1)
-                            else:
-                                par = np.concatenate([_.T for _ in mini_batch['prevAction']], axis=0).reshape([-1, self.max_ep, 1])
+                            par = np.concatenate([_.T for _ in mini_batch['prevAction']], axis=0).reshape([-1, self.max_ep, 1])
 
-                                for se in range(self.max_ep // self.reset_step):
-                                    par[:,int(se*self.reset_step),:] = -1
+                            for se in range(self.max_ep // self.reset_step):
+                                par[:,int(se*self.reset_step),:] = -1
 
                             feed_dict[self.workers[i].local_AC.prevAction_raw] = par
                         else:
                             feed_dict[self.workers[i].local_AC.action_holder] =mini_batch['action_holder'].reshape([-1,self.a_size])
-                        if self.use_context or self.use_context_v2:
+                        if self.use_context_v2:
                             feed_dict[self.workers[i].local_AC.context_state_in[0]] = context_state_train[0]
                             feed_dict[self.workers[i].local_AC.context_state_in[1]] = context_state_train[1]
                         if self.use_gs_estimator:
@@ -2103,7 +1803,7 @@ class Worker():
         self.use_randsign = parameter_dict['use_randsign']
         scale = 5
         self.env = test_prob.simul(128, mb_size=parameter_dict['mb_size'], max_task_num=parameter_dict['max_task_num'], use_randsign=self.use_randsign,scale=scale)
-        self.val_env = test_prob_val.simul(1000, mb_size=parameter_dict['mb_size'], max_task_num=parameter_dict['max_task_num'], use_randsign=self.use_randsign,scale=scale)
+        self.val_env = test_prob_val.simul(500, mb_size=parameter_dict['mb_size'], max_task_num=parameter_dict['max_task_num'], use_randsign=self.use_randsign,scale=scale, network_file=parameter_dict['network_file'], profile_file=parameter_dict['profile_file'], targets=parameter_dict['targets'])
         self.model_path = parameter_dict['model_path']
         self.a_size = parameter_dict['a_size']
         self.h_size = parameter_dict['h_size']
@@ -2117,16 +1817,13 @@ class Worker():
         self.max_ep = parameter_dict['max_ep']
         self.reset_step = parameter_dict['reset_step']
         self.use_curiosity = parameter_dict['use_curiosity']
-        self.use_update_noise = parameter_dict['use_update_noise']
         self.use_attention = parameter_dict['use_attention']
-        self.use_context = parameter_dict['use_context']
         self.use_context_v2 = parameter_dict['use_context_v2']
         self.use_gs_estimator= parameter_dict['use_gs_estimator']
         self.use_message= parameter_dict['use_message']
         self.message_dim= parameter_dict['message_dim']
         self.use_varout = parameter_dict['use_varout']
         self.incremental_action = parameter_dict['incremental_action']
-        self.stay_prev = parameter_dict['stay_prev']
         self.inc_bound = parameter_dict['inc_bound']
         starter_learning_rate = parameter_dict['start_lr']
 #        self.learning_rate = learning_rate = tf.train.exponential_decay(starter_learning_rate, global_step,
@@ -2143,12 +1840,12 @@ class Worker():
         self.total_spear = []
         self.total_intrinsic = []
         self.initial_reward = -np.inf
-        self.summary_writer = tf.compat.v1.summary.FileWriter(self.model_path+"/train_"+str(self.number))
+        #self.summary_writer = tf.compat.v1.summary.FileWriter(self.model_path+"/train_"+str(self.number))
         
         self.barrier = barrier
         self.global_epi = global_epi
 
-        self.training_buffer = experience_buffer(buffer_size=parameter_dict['buffer_size'], buffer_ready_size=parameter_dict['buffer_ready_size'], isselect=self.action_type=='select', iscontext=(self.use_context or self.use_context_v2), isgraphnet=self.input_type=='graph_net', isgsest=self.use_gs_estimator, ismessage=self.use_message)
+        self.training_buffer = experience_buffer(buffer_size=parameter_dict['buffer_size'], buffer_ready_size=parameter_dict['buffer_ready_size'], isselect=self.action_type=='select', iscontext=self.use_context_v2, isgraphnet=self.input_type=='graph_net', isgsest=self.use_gs_estimator, ismessage=self.use_message)
         self.buffer_ready_size = parameter_dict['buffer_ready_size']
         self.update_batch_size = parameter_dict['update_batch_size']
         self.num_epoch = parameter_dict['num_epoch']
@@ -2167,8 +1864,6 @@ class Worker():
 
         if parameter_dict['action_type'] == 'discrete' or parameter_dict['action_type'] == 'select':
             self.action_width += 1
-            if parameter_dict['stay_prev']:
-                self.action_width += 1
         self.action_width_real = self.action_width
 
         if self.env.num_sample > 256:
@@ -2220,22 +1915,6 @@ class Worker():
 
         #self.update_local_ops = update_target_graph('global',self.name)
         self.update_local_ops = None
-
-        if self.use_update_noise:
-            self.name_perturb = self.name+'_perturb'
-            self.local_AC_perturb = AC_Network(parameter_dict,self.action_width,self.name_perturb,self.trainer,self.num_workers,global_step)
-
-            self.name_adaptive = self.name+'_adaptive'
-            self.local_AC_adaptive = AC_Network(parameter_dict,self.action_width,self.name_adaptive,self.trainer,self.num_workers,global_step)
-
-            self.noise_start_scale = parameter_dict['noise_start_scale']
-            self.distance_threshold = parameter_dict['distance_threshold']
-            self.param_noise_scale = tf.get_variable("param_noise_scale"+"_"+self.name, (), initializer=tf.constant_initializer(self.noise_start_scale), trainable=False)
-            self.add_noise_ops = noisy_vars(self.name, self.name_perturb, noise_std=self.param_noise_scale)
-            self.add_noise_adaptive_ops = noisy_vars(self.name, self.name_adaptive, noise_std=self.param_noise_scale)
-            
-            self.policy_distance = tf.sqrt(tf.reduce_mean(tf.square(self.local_AC.alpha - self.local_AC_adaptive.alpha))) + \
-                                    tf.sqrt(tf.reduce_mean(tf.square(self.local_AC.beta - self.local_AC_adaptive.beta)))
 
         
     def process_and_add_experience(self, ep_history,gamma,bootstrap_value):
@@ -2387,15 +2066,12 @@ class Worker():
         processed_exp = {}
 
         processed_exp['prevAveract'] = np.vstack(ep_history[:,6])
-        if self.use_context or self.use_context_v2:
+        if self.use_context_v2:
             if self.use_randsign:
                 scale = self.action_width[0] // 2
                 if self.incremental_action:
                     scale = self.action_width_real[0] // 2
                 processed_exp['dummyParam'] = np.vstack(ep_history[:,10]) + scale
-                if self.stay_prev:
-                    scale = (self.action_width[0] - 1) // 2
-                    processed_exp['dummyParam'] = np.vstack(ep_history[:,10]) + scale
             else:
                 processed_exp['dummyParam'] = np.vstack(ep_history[:,10])
         if self.use_varout:
@@ -2440,41 +2116,10 @@ class Worker():
         ob = np.zeros((netwidth, netwidth))
         ob[self.env.weightmat!=0] = np.round(s[:-self.node_size].reshape([-1]))
         ob *= self.env.sign_mask
-        #weightmat clustermap
-        #colidx = np.array([25,  7, 21,  9,  4, 15,  5, 10, 13, 18, 24, 17,  6, 11, 12,  8, 16,
-       #29, 23,  3,  0, 28, 27, 26, 20, 22, 14, 19,  1,  2, 30])
-        #rowidx = np.array([ 7, 13, 26, 29,  5, 18, 23, 12, 14,  6,  8, 25, 19, 27, 17, 16, 15,
-       #21, 11, 22,  9, 20, 28, 24, 10,  4,  3,  2,  0,  1])
-        #abs(weightmat) clustermap
-        #colidx = np.array([ 7, 21,  9,  4, 15, 25,  5, 10, 14, 19,  1,  2, 24, 17,  6, 11, 12,
-       #18, 13, 23,  8, 16, 29,  3,  0, 28, 27, 26, 20, 22, 30])
-        #rowidx = np.array([ 7, 13, 23, 12, 14, 25, 27, 22, 11, 16, 17, 15, 21, 19, 24,  9, 20,
-       #28, 10,  4,  3,  2,  0,  1,  6,  8, 26, 29,  5, 18])
         bas = np.zeros(self.node_size+self.env.num_input_node)
         bas[self.env.num_input_node:] = np.round(s[-self.node_size:])
         ob = np.concatenate((ob, bas.reshape([-1,1])), axis=1)
-        #ob = ob[rowidx,:]
-        #ob = ob[:,colidx]
         return ob
-
-    def s_setting(self, s, selector, acttype):
-        if acttype == 0:#shift 1 to right
-            s[self.idx_house[selector]] = np.roll(s[self.idx_house[selector]], 1)
-        elif acttype == 1:#random initialize
-            s[self.idx_house[selector]] = np.random.choice(int(self.action_width[0]), self.idx_house[selector].size)
-        elif acttype == 2:#flatten
-            s[self.idx_house[selector]] = 1
-            #s = np.clip(s, 0, self.action_width[0]-1)
-        elif acttype == 3:#plus 1
-            s[self.idx_house[selector]] += 1
-            s = np.clip(s, 0, self.action_width[0]-1)
-        elif acttype == 4:#reverse sort
-            st = s[self.idx_house[selector]]
-            si = np.argsort(st)
-            st[si] = st[si[::-1]]
-            s[self.idx_house[selector]] = st
-
-        return s
 
 
     def run_target_task(self,actiontemp):
@@ -2484,10 +2129,7 @@ class Worker():
         self.do_reset_initials.value = 1
 
         if self.action_type == 'discrete' or self.action_type == 'select':
-            if self.stay_prev:
-                s = np.round(s * (self.action_width - 2))
-            else:
-                s = np.round(s * 10)
+            s = np.round(s * 10)
             s_scaled = s - 5
             if self.incremental_action:
                 s = np.zeros(a_size)
@@ -2556,7 +2198,7 @@ class Worker():
                     #local_AC_running.state_in[0]:state[0], local_AC_running.state_in[1]:state[1]}
                     local_AC_running.state_in[0][0]:state[0][0], local_AC_running.state_in[0][1]:state[0][1],
                     local_AC_running.state_in[1][0]:state[1][0], local_AC_running.state_in[1][1]:state[1][1]}
-            if self.use_context or self.use_context_v2:
+            if self.use_context_v2:
                 feed_dict[local_AC_running.context_state_in[0]] = context_state[0]
                 feed_dict[local_AC_running.context_state_in[1]] = context_state[1]
             if self.use_gs_estimator:
@@ -2629,11 +2271,6 @@ class Worker():
                         a_inc = a_dist.ravel() - (self.inc_bound//2)
                         s_ = np.clip(s + a_inc.reshape([-1]), 0, self.action_width_real-1)
                         a_dist_scaled = s_.reshape([-1]) - self.action_center
-                    elif self.stay_prev:
-                        s_ = s.copy()
-                        cidx = a_dist.ravel()!=0
-                        s_[cidx] = a_dist.ravel()[cidx] - 1
-                        a_dist_scaled = s_.reshape([-1]) - self.action_center
                     else:
                         a_dist_scaled = a_dist.reshape([-1]) - 5
                 else:
@@ -2659,7 +2296,6 @@ class Worker():
                         same_penalty = 0
                     sp_house.append(same_penalty)
                     s_[a_dist[0][0]] = a_dist[0][1]
-                    #s_ = self.s_setting(s_, a_dist[0][0], a_dist[0][1])
                 if self.use_randsign:
                     a_dist_scaled = s_.copy() - self.action_center
                 else:
@@ -2679,7 +2315,7 @@ class Worker():
             if np.isnan(spear):
                 spear = np.array(0)
 
-            if self.incremental_action or self.action_type == 'select' or (self.action_type == 'discrete' and self.stay_prev):
+            if self.incremental_action or self.action_type == 'select' or (self.action_type == 'discrete'):
                 s = s_.copy()
             else:
                 s = a_dist.copy().reshape([-1])
@@ -2756,10 +2392,7 @@ class Worker():
                         self.do_initialize_task.value = 1
 
                         if self.action_type == 'discrete' or self.action_type == 'select':
-                            if self.stay_prev:
-                                s = np.round(s * (self.action_width - 2))
-                            else:
-                                s = np.round(s * (self.action_width[0] - 1))
+                            s = np.round(s * (self.action_width[0] - 1))
                             s_scaled = s - self.action_center[0]
                             if self.incremental_action:
                                 s = np.zeros(a_size)
@@ -2830,7 +2463,7 @@ class Worker():
                             #local_AC_running.state_in[0]:state[0], local_AC_running.state_in[1]:state[1]}
                             local_AC_running.state_in[0][0]:state[0][0], local_AC_running.state_in[0][1]:state[0][1],
                             local_AC_running.state_in[1][0]:state[1][0], local_AC_running.state_in[1][1]:state[1][1]}
-                    if self.use_context or self.use_context_v2:
+                    if self.use_context_v2:
                         feed_dict[local_AC_running.context_state_in[0]] = context_state[0]
                         feed_dict[local_AC_running.context_state_in[1]] = context_state[1]
                     if self.use_gs_estimator:
@@ -2851,15 +2484,11 @@ class Worker():
                     elif self.input_type == 'fc':
                         ob = s
                         feed_dict[local_AC_running.prevAction] = ob.reshape([1,1,-1])
-                        if self.use_context:
-                            feed_dict[local_AC_running.dummy_prevAction] = cur_dummy_params.reshape([1,1,-1])
                         feed_dict[local_AC_running.bs] = 1
                     elif self.input_type == 'semi_graph' or self.input_type == 'gru_semi_graph' or self.input_type == 'attention' :
                         ob = s
                         for ns in range(self.node_size):
                             feed_dict[local_AC_running.prevAction[ns]] = ob[self.idx_house[ns]].reshape([1,-1])
-                            if self.use_context:
-                                feed_dict[local_AC_running.dummy_prevAction[ns]] = cur_dummy_params[self.idx_house[ns]].reshape([1,-1])
                         if self.input_type == 'gru_semi_graph' or self.input_type == 'attention' :
                             feed_dict[local_AC_running.bs] = 1
                         feed_dict[local_AC_running.bst] = 1
@@ -2913,11 +2542,6 @@ class Worker():
                                 a_inc = a_dist.ravel() - (self.inc_bound//2)
                                 s_ = np.clip(s + a_inc.reshape([-1]), 0, self.action_width_real-1)
                                 a_dist_scaled = s_.reshape([-1]) - self.action_center
-                            elif self.stay_prev:
-                                s_ = s.copy()
-                                cidx = a_dist.ravel()!=0
-                                s_[cidx] = a_dist.ravel()[cidx] - 1
-                                a_dist_scaled = s_.reshape([-1]) - self.action_center
                             else:
                                 a_dist_scaled = a_dist.reshape([-1]) - self.action_center[0]
                         else:
@@ -2943,7 +2567,6 @@ class Worker():
                                 same_penalty = 0
                             sp_house.append(same_penalty)
                             s_[a_dist[0][0]] = a_dist[0][1]
-                            #s_ = self.s_setting(s_, a_dist[0][0], a_dist[0][1])
                         if self.use_randsign:
                             a_dist_scaled = s_.copy() - self.action_center
                         else:
@@ -3001,7 +2624,7 @@ class Worker():
                     if self.use_curiosity:
                         his += [intrinsic_reward.reshape([-1])]
                     ep_history.append(his) # (s,r) - state, action - action, r_ - reward, v - value, a_dist - action_probs
-                    if self.incremental_action or self.action_type == 'select' or (self.action_type == 'discrete' and self.stay_prev):
+                    if self.incremental_action or self.action_type == 'select' or (self.action_type == 'discrete'):
                         s = s_.copy()
                     else:
                         s = a_dist.copy().reshape([-1])
@@ -3036,7 +2659,7 @@ class Worker():
                         #local_AC_running.state_in[0]:state[0], local_AC_running.state_in[1]:state[1]}
                         local_AC_running.state_in[0][0]:state[0][0], local_AC_running.state_in[0][1]:state[0][1],
                         local_AC_running.state_in[1][0]:state[1][0], local_AC_running.state_in[1][1]:state[1][1]}
-                if self.use_context or self.use_context_v2:
+                if self.use_context_v2:
                     feed_dict[local_AC_running.context_state_in[0]] = context_state[0]
                     feed_dict[local_AC_running.context_state_in[1]] = context_state[1]
                 if self.use_gs_estimator:
@@ -3186,147 +2809,3 @@ class Worker():
                 #self.epsilon *= 0.999
                 sys.stdout.flush()
 
-     
-if __name__ == '__main__':           
-    tf.compat.v1.reset_default_graph()
-    
-    use_randsign = True
-    max_task_num = 100000
-    scale = 5
-    env = test_prob.simul(num_initial=128, start_process=False, max_task_num=max_task_num, use_randsign=use_randsign, scale=scale)
-    link_size, node_size = env.get_num_params()
-    a_size = link_size# + node_size
-    
-    aw, ac = env.get_link_scale(level=3, scale= scale)    
-    #action_width = np.concatenate((aw, np.zeros(node_size) + scale*2))
-    #action_center = np.concatenate((ac, np.zeros(node_size) + scale))
-    action_width = aw
-    action_center = ac
-    #aw, ac, bw, bc = env.get_link_scale(level=3, scale=scale, basal_scale=3)
-    ##action_width = np.concatenate((aw, bw))
-    ##action_center = np.concatenate((ac, bc))
-    #action_width = np.concatenate((aw, np.zeros(0) + 0*2))
-    #action_center = np.concatenate((ac, np.zeros(0) + 0))
-    
-    
-    epsilon = 1 - (10 ** (np.log10(0.95) / a_size)) # NOT USED
-    total_episodes = 3001 # NOT USED
-    savedir = 'GREY'
-
-    if not os.path.exists(savedir):
-        os.mkdir(savedir)
-    
-    parameter_dict = {
-            'a_size': a_size,
-            'h_size': 512,
-            'node_size': node_size,
-            'link_size': link_size,
-            'num_input_node': env.num_input_node,
-            'use_randsign': use_randsign,
-            'max_task_num': max_task_num,
-            'input_type': 'graph_net', #fc, conv, semi_graph, gru_semi_graph, attention, graph_net
-            'output_type': 'fc', #fc, semi_graph, gru_semi_graph
-            'sg_unit': '64-3', # num_unit-num_layer
-            'action_type': 'discrete', #continuous, discrete, select
-            'adj_mat': np.sign(env.weightmat),
-            'start_lr': 1e-5,
-            'use_update_noise': False,
-            'noise_start_scale': 0.01,
-            'distance_threshold': 0.3,
-            'gamma': 0.95,
-            'pretrain_epi': 10,
-            'max_ep': 5,
-            'reset_step': 5,
-            'model_path': savedir,
-            'mb_size':16,
-            'use_curiosity': False,
-            'use_noisynet': False,
-            'use_attention': False,
-            'use_context': False,
-            'use_context_v2': True,
-            'averact_context_target': False,
-            'use_gs_estimator': True,
-            'use_message': True,
-            'message_dim': 32,
-            'gs_attention': False,
-            'use_ib': False,
-            'probabilistic_context': False,
-            'use_varout': True,
-            'curiosity_encode_size': 128,
-            'curiosity_strength': 0.05,
-            'buffer_size': 2,
-            'buffer_ready_size': 2,
-            'update_batch_size': 2,
-            'num_epoch': 1,
-            'action_branching': False,
-            'incremental_action': False,
-            'stay_prev': False,
-            'inc_bound':3,
-            'autoregressive':False
-            }
-    assert(not (parameter_dict['use_update_noise'] and parameter_dict['use_noisynet']))
-    assert(not (parameter_dict['use_context'] and parameter_dict['use_context_v2']))
-    if parameter_dict['action_type'] == 'discrete' or parameter_dict['action_type'] == 'select':
-        action_width += 1
-        if parameter_dict['stay_prev']:
-            action_width += 1
-    
-    with tf.device('/cpu:0'):
-        global_step = tf.Variable(0, trainable=False)
-        global_episodes = tf.Variable(0, dtype=tf.int32, name='global_episodes', trainable=False)
-        learning_rate = parameter_dict['start_lr']
-        #learning_rate = tf.train.cosine_decay_restarts(parameter_dict['start_lr'], global_step,
-        #                                       20000, t_mul=1, m_mul=0.9, alpha=0.1)
-        trainer = tf.compat.v1.train.AdamOptimizer(learning_rate=learning_rate)
-
-        memory_dict = {}
-    #    num_workers = multiprocessing.cpu_count() # Set workers to number of available CPU threads
-        num_workers = 1 # Set workers to number of available CPU threads
-        barrier = multiprocessing.Barrier(num_workers)
-        global_epi = multiprocessing.Value('d',0)
-
-        workers = []
-        # Create worker classes
-        for i in range(num_workers):
-            memory_dict['worker_%i'%i] = deque()
-            workers.append(Worker(i, parameter_dict, epsilon, trainer, num_workers, global_episodes, global_step, memory_dict, barrier, global_epi))
-
-        master_network = AC_Network(parameter_dict=parameter_dict, action_width=action_width, scope='global', trainer=trainer,
-                                    num_workers=num_workers,global_step=global_step, worker_lists=workers) # Generate global network
-        master = Master(env, parameter_dict, master_network, trainer, global_step, memory_dict, workers, global_epi)
-        for w in workers:
-            w.set_update_local_ops()
-        saver = tf.compat.v1.train.Saver(max_to_keep=5)
-        pretrain_saver = tf.compat.v1.train.Saver(max_to_keep=1)
-        
-    #seconfig = tf.compat.v1.ConfigProto(allow_soft_placement = True, intra_op_parallelism_threads=15, inter_op_parallelism_threads=15)
-    seconfig = tf.compat.v1.ConfigProto(allow_soft_placement = True)
-    seconfig.gpu_options.allow_growth = True
-    # Launch the tensorflow graph
-    with tf.compat.v1.Session(config=seconfig) as sess:
-        coord = tf.train.Coordinator()
-        
-        sess.run(tf.compat.v1.global_variables_initializer())
-
-        pretrain = multiprocessing.Value('d',0)
-        TRAIN_EVENT = threading.Event()
-        COLLECT_EVENT = threading.Event()
-        TRAIN_EVENT.clear()
-        COLLECT_EVENT.clear()
-    #    s_init = np.random.rand(1,1,a_size)
-        s_init = None
-        worker_threads = []
-        for worker in workers:
-            worker_work = lambda: worker.work(parameter_dict['gamma'], sess, coord, saver, pretrain_saver, total_episodes, TRAIN_EVENT, COLLECT_EVENT, pretrain, s_init=s_init)
-            t = threading.Thread(target=(worker_work))
-            t.start()
-            sleep(0.5)
-            worker_threads.append(t)
-
-        threads = []
-        threads.append(threading.Thread(target=master.check(sess, coord, TRAIN_EVENT, COLLECT_EVENT, pretrain)))
-        threads[0].start()
-
-        threads += worker_threads
-
-        coord.join(threads)

@@ -14,6 +14,7 @@ GREY has been tested in Linux and Python 3.6.9.
 # Instructions
 
 **Required data**
+
 Network, genomic mutation profile and AUC(drug response value) are required to run GREY.
 
 `example_data/` directory has example files for trametinib as follows.
@@ -22,4 +23,5 @@ Network, genomic mutation profile and AUC(drug response value) are required to r
 `example_data/Core_profile_MM.csv` - Genomic mutation profile of nodes(genes) in the `trametinib_network.csv`. (Column-Cell line, Row-Gene, AUC)
 
 **Usage**
-`run_example.ipynb` has example code to run GREY.
+
+`run_example.ipynb` has example codes to run GREY.

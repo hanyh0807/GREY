@@ -1,0 +1,4 @@
+MAP2K2	source
+MAP2K1	source
+Apoptosis	target
+Proliferation	target

@@ -1,0 +1,8 @@
+
+hhn_home="/data2/jhlee/sw/hierarchical-hotnet"
+network_name="EdwinWang_1"
+data="EdwinWang_1_data"
+num_cores="50"
+num_permutations="1000"
+
+nohup ./run_hhn.sh $hhn_home $network_name $data $num_cores $num_permutations &

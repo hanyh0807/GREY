@@ -1,0 +1,4 @@
+EGFR	source
+ERBB2	source
+Proliferation	target
+Apoptosis	target
